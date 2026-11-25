@@ -68,6 +68,8 @@ namespace MCP_FTP.Core
                     {
                         if (param.Type == "boolean" && bool.TryParse(param.DefaultValue, out bool bVal))
                             propertySchema.Default = bVal;
+                        else if (param.Type == "integer" && int.TryParse(param.DefaultValue, out int iVal))
+                            propertySchema.Default = iVal;
                         else
                             propertySchema.Default = param.DefaultValue;
                     }

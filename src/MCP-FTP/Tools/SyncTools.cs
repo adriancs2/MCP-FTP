@@ -11,16 +11,18 @@ namespace MCP_FTP.Tools
     public class ListRemoteFilesTool : ITool
     {
         public string Name => "ftp_list_remote_files";
-        public string Description => "Recursively list files on the remote FTP server for a profile, including file sizes and UTC modified timestamps.";
+        public string Description => "Recursively list files on the remote FTP server for a profile, including file sizes and UTC modified timestamps. Respects exclude_config.txt by default so large excluded folders (like uploads/ or vendor/) are skipped unless include_excluded is true.";
         public ToolParamList Params => new ToolParamList()
             .String("profile", "Profile name.", required: true)
-            .String("path", "Optional relative subfolder on the FTP server.", required: false, defaultValue: "");
+            .String("path", "Optional relative subfolder on the FTP server.", required: false, defaultValue: "")
+            .Bool("include_excluded", "If true, also scan and return files inside directories matched by exclude_config.txt.", required: false, defaultValue: false);
 
         public ToolResult Execute(JObject args)
         {
             string profile = args.Value<string>("profile");
             string path = args.Value<string>("path") ?? "";
-            var files = FtpSyncEngine.ListRemoteFiles(profile, path);
+            bool includeExcluded = args.Value<bool?>("include_excluded") ?? false;
+            var files = FtpSyncEngine.ListRemoteFiles(profile, path, includeExcluded);
             return ToolResult.Success(JsonConvert.SerializeObject(files, Formatting.Indented));
         }
     }
@@ -28,16 +30,18 @@ namespace MCP_FTP.Tools
     public class SyncTool : ITool
     {
         public string Name => "ftp_sync";
-        public string Description => "Recursively sync local folder to FTP using datetime+size matching (MLSD), respecting profiles/{profile}/exclude_config.txt. Also consumes and immediately deletes profiles/{profile}/delete-file.txt if present.";
+        public string Description => "Sync local folder to FTP using fast local snapshot tracking (profiles/{profile}/sync_snapshot.txt) with zero remote scanning after the initial sync. Respects exclude_config.txt and consumes delete-file.txt if present. Set verify_remote=true to reconcile against the live FTP server via MLSD.";
         public ToolParamList Params => new ToolParamList()
             .String("profile", "Profile name.", required: true)
-            .Bool("force_all", "If true, upload all non-excluded files regardless of remote timestamp.", required: false, defaultValue: false);
+            .Bool("force_all", "If true, upload all non-excluded local files regardless of snapshot or remote timestamp.", required: false, defaultValue: false)
+            .Bool("verify_remote", "If true, scan the remote FTP server via MLSD instead of trusting the local snapshot (useful if files were modified directly on the server).", required: false, defaultValue: false);
 
         public ToolResult Execute(JObject args)
         {
             string profile = args.Value<string>("profile");
             bool forceAll = args.Value<bool?>("force_all") ?? false;
-            var report = FtpSyncEngine.SyncProfile(profile, forceAll);
+            bool verifyRemote = args.Value<bool?>("verify_remote") ?? false;
+            var report = FtpSyncEngine.SyncProfile(profile, forceAll, verifyRemote);
             return ToolResult.Success(JsonConvert.SerializeObject(report, Formatting.Indented));
         }
     }
@@ -91,6 +95,78 @@ namespace MCP_FTP.Tools
 
             List<string> files = arr.Select(t => t.Value<string>()).Where(s => !string.IsNullOrWhiteSpace(s)).ToList();
             var report = FtpSyncEngine.DeleteRemoteFiles(profile, files);
+            return ToolResult.Success(JsonConvert.SerializeObject(report, Formatting.Indented));
+        }
+    }
+
+    public class ReadRemoteFileTool : ITool
+    {
+        public string Name => "ftp_read_remote_file";
+        public string Description => "Read a UTF-8 text file directly from the remote FTP server into memory without saving it locally (ideal for inspecting PHP error_log, .htaccess, or remote config files). Supports tail_lines and max_bytes.";
+        public ToolParamList Params => new ToolParamList()
+            .String("profile", "Profile name.", required: true)
+            .String("path", "Relative remote file path (e.g. 'error_log' or 'logs/app.log').", required: true)
+            .Int("tail_lines", "Optional. If greater than 0, return only the last N lines of the file (useful for PHP error_log).", required: false, defaultValue: 0)
+            .Int("max_bytes", "Maximum bytes to return (default: 262144 = 256 KB).", required: false, defaultValue: 262144);
+
+        public ToolResult Execute(JObject args)
+        {
+            string profile = args.Value<string>("profile");
+            string path = args.Value<string>("path");
+            int tailLines = args.Value<int?>("tail_lines") ?? 0;
+            int maxBytes = args.Value<int?>("max_bytes") ?? 262144;
+
+            var result = FtpSyncEngine.ReadRemoteTextFile(profile, path, tailLines, maxBytes);
+            return ToolResult.Success(JsonConvert.SerializeObject(result, Formatting.Indented));
+        }
+    }
+
+    public class DownloadRemoteFilesTool : ITool
+    {
+        public string Name => "ftp_download";
+        public string Description => "Download one or more files from the remote FTP server to the profile's local_folder (or an optional custom local_dir), preserving relative subfolder structure.";
+        public ToolParamList Params => new ToolParamList()
+            .String("profile", "Profile name.", required: true)
+            .Array("files", "Relative remote file paths to download (e.g. ['index.php', 'error_log']).", required: true, itemsType: "string")
+            .String("local_dir", "Optional local destination root directory. Defaults to the profile's configured local_folder.", required: false)
+            .Bool("overwrite", "If true (default), overwrite existing local files.", required: false, defaultValue: true);
+
+        public ToolResult Execute(JObject args)
+        {
+            string profile = args.Value<string>("profile");
+            var arr = args["files"] as JArray;
+            if (arr == null || arr.Count == 0)
+                throw new ArgumentException("files array is required and must not be empty.");
+
+            string localDir = args.Value<string>("local_dir");
+            bool overwrite = args.Value<bool?>("overwrite") ?? true;
+            List<string> files = arr.Select(t => t.Value<string>()).Where(s => !string.IsNullOrWhiteSpace(s)).ToList();
+
+            var report = FtpSyncEngine.DownloadRemoteFiles(profile, files, localDir, overwrite);
+            return ToolResult.Success(JsonConvert.SerializeObject(report, Formatting.Indented));
+        }
+    }
+
+    public class DownloadAllRemoteFilesTool : ITool
+    {
+        public string Name => "ftp_download_all";
+        public string Description => "Recursively download the full source code (or a subfolder) from the FTP server to local_folder while automatically skipping runtime user uploads and paths listed in exclude_config.txt. Updates sync_snapshot.txt so subsequent ftp_sync calls on the new machine are instant.";
+        public ToolParamList Params => new ToolParamList()
+            .String("profile", "Profile name.", required: true)
+            .String("path", "Optional remote subfolder to download (default empty = entire workspace).", required: false, defaultValue: "")
+            .String("local_dir", "Optional custom local destination root. Defaults to the profile's configured local_folder.", required: false)
+            .Bool("overwrite", "If true (default), overwrite existing local files. If false, only download missing files.", required: false, defaultValue: true)
+            .Bool("include_excluded", "If true, also download files matched by exclude_config.txt. Keep false (default) to skip runtime user-uploaded media/databases.", required: false, defaultValue: false);
+
+        public ToolResult Execute(JObject args)
+        {
+            string profile = args.Value<string>("profile");
+            string path = args.Value<string>("path") ?? "";
+            string localDir = args.Value<string>("local_dir");
+            bool overwrite = args.Value<bool?>("overwrite") ?? true;
+            bool includeExcluded = args.Value<bool?>("include_excluded") ?? false;
+
+            var report = FtpSyncEngine.DownloadAllRemoteFiles(profile, path, localDir, overwrite, includeExcluded);
             return ToolResult.Success(JsonConvert.SerializeObject(report, Formatting.Indented));
         }
     }

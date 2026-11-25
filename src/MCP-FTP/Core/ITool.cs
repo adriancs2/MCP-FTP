@@ -34,6 +34,12 @@ namespace MCP_FTP.Core
             return this;
         }
 
+        public ToolParamList Int(string name, string description, bool required = false, int? defaultValue = null)
+        {
+            _params.Add(new ToolParam { Name = name, Type = "integer", Description = description, Required = required, DefaultValue = defaultValue?.ToString() });
+            return this;
+        }
+
         public ToolParamList Array(string name, string description, bool required = false, string itemsType = "string")
         {
             _params.Add(new ToolParam { Name = name, Type = "array", Description = description, Required = required, ItemsType = itemsType });

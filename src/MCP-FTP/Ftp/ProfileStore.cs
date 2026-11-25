@@ -54,6 +54,70 @@ namespace MCP_FTP.Ftp
             return Path.Combine(GetProfileDir(profileName), "delete-file.txt");
         }
 
+        public static string GetSnapshotPath(string profileName)
+        {
+            return Path.Combine(GetProfileDir(profileName), "sync_snapshot.txt");
+        }
+
+        public static Dictionary<string, LocalFileSnap> LoadSnapshot(string profileName)
+        {
+            string path = GetSnapshotPath(profileName);
+            if (!File.Exists(path))
+                return null;
+
+            var map = new Dictionary<string, LocalFileSnap>(StringComparer.OrdinalIgnoreCase);
+            foreach (string raw in File.ReadAllLines(path, Encoding.UTF8))
+            {
+                if (string.IsNullOrWhiteSpace(raw) || raw.StartsWith("#"))
+                    continue;
+
+                string[] parts = raw.Split('|');
+                if (parts.Length < 3)
+                    continue;
+
+                string rel = parts[0].Trim().Replace('\\', '/').TrimStart('/');
+                if (string.IsNullOrEmpty(rel))
+                    continue;
+
+                if (long.TryParse(parts[1], out long size) && long.TryParse(parts[2], out long ticks))
+                {
+                    map[rel] = new LocalFileSnap(size, ticks);
+                }
+            }
+            return map;
+        }
+
+        public static void SaveSnapshot(string profileName, Dictionary<string, LocalFileSnap> snapshot)
+        {
+            if (snapshot == null)
+                return;
+
+            string dir = GetProfileDir(profileName);
+            if (!Directory.Exists(dir))
+                Directory.CreateDirectory(dir);
+
+            string path = GetSnapshotPath(profileName);
+            string tmpPath = path + ".tmp";
+
+            var sb = new StringBuilder(snapshot.Count * 64 + 64);
+            sb.AppendLine("# relative_path|size_bytes|last_write_utc_ticks");
+            foreach (var kv in snapshot.OrderBy(k => k.Key, StringComparer.OrdinalIgnoreCase))
+            {
+                sb.Append(kv.Key).Append('|').Append(kv.Value.Size).Append('|').Append(kv.Value.LastWriteUtcTicks).AppendLine();
+            }
+
+            File.WriteAllText(tmpPath, sb.ToString(), new UTF8Encoding(false));
+            if (File.Exists(path))
+            {
+                File.Copy(tmpPath, path, overwrite: true);
+                File.Delete(tmpPath);
+            }
+            else
+            {
+                File.Move(tmpPath, path);
+            }
+        }
+
         public static bool Exists(string profileName)
         {
             return File.Exists(GetConfigPath(profileName));
@@ -137,7 +201,8 @@ namespace MCP_FTP.Ftp
                         WebsiteUrl = cfg.WebsiteUrl,
                         SecurityMode = cfg.SecurityMode,
                         ExcludeConfigPath = GetExcludeConfigPath(name),
-                        DeleteFilePath = GetDeleteFilePath(name)
+                        DeleteFilePath = GetDeleteFilePath(name),
+                        SnapshotPath = GetSnapshotPath(name)
                     });
                 }
                 catch { }

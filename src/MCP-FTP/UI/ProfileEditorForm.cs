@@ -11,6 +11,7 @@ namespace MCP_FTP.UI
         [DllImport("user32.dll")]
         private static extern bool SetForegroundWindow(IntPtr hWnd);
 
+        private readonly bool _isEditMode;
         private TextBox _txtProfile;
         private TextBox _txtHost;
         private NumericUpDown _numPort;
@@ -25,9 +26,10 @@ namespace MCP_FTP.UI
 
         public string SavedProfileName { get; private set; }
 
-        public ProfileEditorForm(string existingProfileName = null)
+        public ProfileEditorForm(string existingProfileName = null, ProfileDraft prefill = null)
         {
-            Text = string.IsNullOrWhiteSpace(existingProfileName) ? "MCP-FTP - Create Profile" : $"MCP-FTP - Edit Profile ({existingProfileName})";
+            _isEditMode = !string.IsNullOrWhiteSpace(existingProfileName) && ProfileStore.Exists(existingProfileName);
+            Text = !_isEditMode ? "MCP-FTP - Create Profile" : $"MCP-FTP - Edit Profile ({existingProfileName})";
             StartPosition = FormStartPosition.CenterScreen;
             FormBorderStyle = FormBorderStyle.FixedDialog;
             MaximizeBox = false;
@@ -38,9 +40,14 @@ namespace MCP_FTP.UI
 
             BuildLayout();
 
-            if (!string.IsNullOrWhiteSpace(existingProfileName) && ProfileStore.Exists(existingProfileName))
+            if (_isEditMode)
             {
                 LoadProfile(existingProfileName);
+            }
+
+            if (prefill != null)
+            {
+                ApplyPrefill(prefill);
             }
         }
 
@@ -51,6 +58,21 @@ namespace MCP_FTP.UI
             BringToFront();
             Activate();
             SetForegroundWindow(Handle);
+            FocusFirstEmptyField();
+        }
+
+        private void FocusFirstEmptyField()
+        {
+            if (!_txtProfile.ReadOnly && string.IsNullOrWhiteSpace(_txtProfile.Text))
+                _txtProfile.Focus();
+            else if (string.IsNullOrWhiteSpace(_txtHost.Text))
+                _txtHost.Focus();
+            else if (string.IsNullOrWhiteSpace(_txtUser.Text))
+                _txtUser.Focus();
+            else if (string.IsNullOrEmpty(_txtPass.Text))
+                _txtPass.Focus();
+            else if (string.IsNullOrWhiteSpace(_txtLocal.Text))
+                _txtLocal.Focus();
         }
 
         private void BuildLayout()
@@ -144,11 +166,44 @@ namespace MCP_FTP.UI
             _numPort.Value = cfg.Port > 0 ? cfg.Port : 21;
             _txtUser.Text = cfg.Username;
             _txtPass.Text = cfg.GetPlainPassword();
-            _cboSecurity.SelectedItem = cfg.SecurityMode ?? "Auto";
+            _cboSecurity.SelectedItem = FtpProfileConfig.NormalizeSecurityMode(cfg.SecurityMode);
             _txtLocal.Text = cfg.LocalFolder;
             _txtRemote.Text = string.IsNullOrWhiteSpace(cfg.RemoteFolder) ? "/" : cfg.RemoteFolder;
             _txtWebsite.Text = cfg.WebsiteUrl;
             _txtExcludes.Text = ProfileStore.ReadExcludeText(profileName);
+        }
+
+        private void ApplyPrefill(ProfileDraft prefill)
+        {
+            if (!_isEditMode && !string.IsNullOrWhiteSpace(prefill.ProfileName))
+                _txtProfile.Text = prefill.ProfileName.Trim();
+
+            if (!string.IsNullOrWhiteSpace(prefill.Host))
+                _txtHost.Text = prefill.Host.Trim();
+
+            if (prefill.Port.HasValue && prefill.Port.Value >= 1 && prefill.Port.Value <= 65535)
+                _numPort.Value = prefill.Port.Value;
+
+            if (!string.IsNullOrWhiteSpace(prefill.SecurityMode))
+                _cboSecurity.SelectedItem = FtpProfileConfig.NormalizeSecurityMode(prefill.SecurityMode);
+
+            if (!string.IsNullOrWhiteSpace(prefill.Username))
+                _txtUser.Text = prefill.Username.Trim();
+
+            if (!string.IsNullOrEmpty(prefill.Password))
+                _txtPass.Text = prefill.Password;
+
+            if (prefill.LocalFolder != null)
+                _txtLocal.Text = prefill.LocalFolder.Trim();
+
+            if (!string.IsNullOrWhiteSpace(prefill.RemoteFolder))
+                _txtRemote.Text = prefill.RemoteFolder.Trim();
+
+            if (prefill.WebsiteUrl != null)
+                _txtWebsite.Text = prefill.WebsiteUrl.Trim();
+
+            if (prefill.Excludes != null)
+                _txtExcludes.Text = prefill.Excludes;
         }
 
         private FtpProfileConfig BuildConfigFromForm()

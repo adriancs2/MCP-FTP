@@ -110,7 +110,7 @@ namespace MCP_FTP.Core
                 ProtocolVersion = version,
                 Capabilities = new ServerCapabilities { Tools = new ToolsCapability() },
                 ServerInfo = new ServerInfo { Name = ServerName, Version = $"{v.Major}.{v.Minor}.{v.Build}" },
-                Instructions = "MCP FTP Auto-Sync server. Credentials are DPAPI-encrypted and never exposed to the AI. Use profile names only. To delete remote files, write relative paths (one per line) to profiles/{profile}/delete-file.txt and run ftp_sync, or call ftp_delete_remote_files."
+                Instructions = "MCP FTP Auto-Sync server. Passwords are encrypted on disk with Windows DPAPI and never echoed back by ftp_list_profiles. Both ftp_create_profile and ftp_edit_profile accept show_ui (true = WinForms dialog, optionally pre-filled; false = direct headless save when the user supplies credentials/settings in chat). ftp_sync uses a fast local snapshot (sync_snapshot.txt) with zero remote FTP queries after the initial sync; pass verify_remote=true only if files were changed directly on the server. Excluded folders in exclude_config.txt are skipped on local scans, remote walks, and ftp_download_all workspace pulls."
             };
 
             SendResponse(request.Id, result);

@@ -57,6 +57,55 @@ namespace MCP_FTP.Ftp
             byte[] plainBytes = ProtectedData.Unprotect(protectedBytes, null, DataProtectionScope.CurrentUser);
             return Encoding.UTF8.GetString(plainBytes);
         }
+
+        public static string NormalizeSecurityMode(string mode)
+        {
+            if (string.IsNullOrWhiteSpace(mode))
+                return "Auto";
+
+            string clean = mode.Trim().Replace(" ", "").Replace("-", "").Replace("_", "");
+            if (clean.Equals("ExplicitFTPS", StringComparison.OrdinalIgnoreCase)
+                || clean.Equals("FTPS", StringComparison.OrdinalIgnoreCase)
+                || clean.Equals("TLS", StringComparison.OrdinalIgnoreCase)
+                || clean.Equals("SSL", StringComparison.OrdinalIgnoreCase))
+            {
+                return "ExplicitFTPS";
+            }
+
+            if (clean.Equals("PlainFTP", StringComparison.OrdinalIgnoreCase)
+                || clean.Equals("Plain", StringComparison.OrdinalIgnoreCase)
+                || clean.Equals("FTP", StringComparison.OrdinalIgnoreCase))
+            {
+                return "PlainFTP";
+            }
+
+            return "Auto";
+        }
+    }
+
+    public class ProfileDraft
+    {
+        public string ProfileName { get; set; }
+        public string Host { get; set; }
+        public int? Port { get; set; }
+        public string SecurityMode { get; set; }
+        public string Username { get; set; }
+        public string Password { get; set; }
+        public string LocalFolder { get; set; }
+        public string RemoteFolder { get; set; }
+        public string WebsiteUrl { get; set; }
+        public string Excludes { get; set; }
+
+        public bool HasAnyEditField =>
+            Host != null
+            || Port.HasValue
+            || SecurityMode != null
+            || Username != null
+            || Password != null
+            || LocalFolder != null
+            || RemoteFolder != null
+            || WebsiteUrl != null
+            || Excludes != null;
     }
 
     public class PublicProfileSummary
@@ -81,6 +130,21 @@ namespace MCP_FTP.Ftp
 
         [JsonProperty("delete_file_path")]
         public string DeleteFilePath { get; set; }
+
+        [JsonProperty("snapshot_path")]
+        public string SnapshotPath { get; set; }
+    }
+
+    public struct LocalFileSnap
+    {
+        public long Size;
+        public long LastWriteUtcTicks;
+
+        public LocalFileSnap(long size, long lastWriteUtcTicks)
+        {
+            Size = size;
+            LastWriteUtcTicks = lastWriteUtcTicks;
+        }
     }
 
     public class RemoteFileInfo
@@ -103,6 +167,9 @@ namespace MCP_FTP.Ftp
         [JsonProperty("profile")]
         public string Profile { get; set; }
 
+        [JsonProperty("sync_mode")]
+        public string SyncMode { get; set; }
+
         [JsonProperty("security_used")]
         public string SecurityUsed { get; set; }
 
@@ -114,6 +181,9 @@ namespace MCP_FTP.Ftp
 
         [JsonProperty("skipped_excluded")]
         public int SkippedExcluded { get; set; }
+
+        [JsonProperty("skipped_remote_excluded_dirs")]
+        public int SkippedRemoteExcludedDirs { get; set; }
 
         [JsonProperty("deleted")]
         public List<string> Deleted { get; set; } = new List<string>();

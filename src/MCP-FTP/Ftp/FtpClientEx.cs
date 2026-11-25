@@ -131,14 +131,27 @@ namespace MCP_FTP.Ftp
             }
         }
 
-        public Dictionary<string, RemoteFileInfo> ListAllFilesRecursive(string startDir = "")
+        public Dictionary<string, RemoteFileInfo> ListAllFilesRecursive(string startDir = "", ExcludeMatcher matcher = null)
         {
+            int ignored = 0;
+            return ListAllFilesRecursive(startDir, matcher, out ignored);
+        }
+
+        public Dictionary<string, RemoteFileInfo> ListAllFilesRecursive(string startDir, ExcludeMatcher matcher, out int skippedExcludedDirs)
+        {
+            skippedExcludedDirs = 0;
             var map = new Dictionary<string, RemoteFileInfo>(StringComparer.OrdinalIgnoreCase);
-            WalkRemote(startDir, map);
+            string normStart = (startDir ?? "").Replace('\\', '/').Trim('/');
+            if (!string.IsNullOrEmpty(normStart) && matcher != null && matcher.IsExcluded(normStart, isDirectory: true))
+            {
+                skippedExcludedDirs++;
+                return map;
+            }
+            WalkRemote(normStart, map, matcher, ref skippedExcludedDirs);
             return map;
         }
 
-        private void WalkRemote(string dir, Dictionary<string, RemoteFileInfo> map)
+        private void WalkRemote(string dir, Dictionary<string, RemoteFileInfo> map, ExcludeMatcher matcher, ref int skippedExcludedDirs)
         {
             List<RemoteFileInfo> entries;
             try
@@ -155,12 +168,49 @@ namespace MCP_FTP.Ftp
                 if (entry.IsDir)
                 {
                     _knownDirs.Add(entry.Path);
-                    WalkRemote(entry.Path, map);
+                    if (matcher != null && matcher.IsExcluded(entry.Path, isDirectory: true))
+                    {
+                        skippedExcludedDirs++;
+                        continue;
+                    }
+                    WalkRemote(entry.Path, map, matcher, ref skippedExcludedDirs);
                 }
                 else
                 {
+                    if (matcher != null && matcher.IsExcluded(entry.Path, isDirectory: false))
+                        continue;
                     map[entry.Path] = entry;
                 }
+            }
+        }
+
+        public void SeedKnownDirectories(IEnumerable<string> relativeFilePaths)
+        {
+            if (relativeFilePaths == null) return;
+            foreach (string raw in relativeFilePaths)
+            {
+                string norm = (raw ?? "").Replace('\\', '/').Trim('/');
+                int slash = norm.LastIndexOf('/');
+                while (slash > 0)
+                {
+                    string parent = norm.Substring(0, slash);
+                    if (!_knownDirs.Add(parent))
+                        break;
+                    slash = parent.LastIndexOf('/');
+                }
+            }
+        }
+
+        private void ForgetDirectoryChain(string relativeDir)
+        {
+            string norm = (relativeDir ?? "").Replace('\\', '/').Trim('/');
+            if (string.IsNullOrEmpty(norm)) return;
+            string[] parts = norm.Split('/');
+            string current = "";
+            foreach (string part in parts)
+            {
+                current = string.IsNullOrEmpty(current) ? part : current + "/" + part;
+                _knownDirs.Remove(current);
             }
         }
 
@@ -198,12 +248,28 @@ namespace MCP_FTP.Ftp
         {
             string norm = relativeRemotePath.Replace('\\', '/').Trim('/');
             int lastSlash = norm.LastIndexOf('/');
-            if (lastSlash > 0)
+            string parentDir = lastSlash > 0 ? norm.Substring(0, lastSlash) : null;
+            if (parentDir != null)
             {
-                EnsureDirectoryExists(norm.Substring(0, lastSlash));
+                EnsureDirectoryExists(parentDir);
             }
 
-            var req = CreateRequest(norm, WebRequestMethods.Ftp.UploadFile, false);
+            try
+            {
+                UploadFileCore(localPath, norm);
+            }
+            catch (WebException ex) when (parentDir != null && ex.Response is FtpWebResponse ftpResp && ftpResp.StatusCode == FtpStatusCode.ActionNotTakenFileUnavailable)
+            {
+                // Cached parent directory was missing on server; recreate directory chain and retry once
+                ForgetDirectoryChain(parentDir);
+                EnsureDirectoryExists(parentDir);
+                UploadFileCore(localPath, norm);
+            }
+        }
+
+        private void UploadFileCore(string localPath, string normRemotePath)
+        {
+            var req = CreateRequest(normRemotePath, WebRequestMethods.Ftp.UploadFile, false);
             using (var fileStream = File.OpenRead(localPath))
             using (var reqStream = req.GetRequestStream())
             {
@@ -223,6 +289,74 @@ namespace MCP_FTP.Ftp
             using (var resp = (FtpWebResponse)req.GetResponse())
             {
                 _ = resp.StatusCode;
+            }
+        }
+
+        public long DownloadFile(string relativeRemotePath, string localDestinationPath)
+        {
+            string norm = (relativeRemotePath ?? "").Replace('\\', '/').Trim('/');
+            if (string.IsNullOrEmpty(norm))
+                throw new ArgumentException("Remote file path is required.");
+
+            string dir = Path.GetDirectoryName(localDestinationPath);
+            if (!string.IsNullOrEmpty(dir) && !Directory.Exists(dir))
+                Directory.CreateDirectory(dir);
+
+            long bytesWritten = 0;
+            var req = CreateRequest(norm, WebRequestMethods.Ftp.DownloadFile, false);
+            using (var resp = (FtpWebResponse)req.GetResponse())
+            using (var respStream = resp.GetResponseStream())
+            using (var fileStream = new FileStream(localDestinationPath, FileMode.Create, FileAccess.Write, FileShare.None))
+            {
+                byte[] buffer = new byte[65536];
+                int read;
+                while (respStream != null && (read = respStream.Read(buffer, 0, buffer.Length)) > 0)
+                {
+                    fileStream.Write(buffer, 0, read);
+                    bytesWritten += read;
+                }
+            }
+            return bytesWritten;
+        }
+
+        public byte[] DownloadBytes(string relativeRemotePath, int maxBytes, out bool truncated)
+        {
+            truncated = false;
+            string norm = (relativeRemotePath ?? "").Replace('\\', '/').Trim('/');
+            if (string.IsNullOrEmpty(norm))
+                throw new ArgumentException("Remote file path is required.");
+
+            var req = CreateRequest(norm, WebRequestMethods.Ftp.DownloadFile, false);
+            using (var ms = new MemoryStream())
+            {
+                try
+                {
+                    using (var resp = (FtpWebResponse)req.GetResponse())
+                    using (var respStream = resp.GetResponseStream())
+                    {
+                        byte[] buffer = new byte[16384];
+                        int read;
+                        while (respStream != null && (read = respStream.Read(buffer, 0, buffer.Length)) > 0)
+                        {
+                            if (maxBytes > 0 && ms.Length + read > maxBytes)
+                            {
+                                int toKeep = maxBytes - (int)ms.Length;
+                                if (toKeep > 0)
+                                    ms.Write(buffer, 0, toKeep);
+                                truncated = true;
+                                req.Abort();
+                                break;
+                            }
+                            ms.Write(buffer, 0, read);
+                        }
+                    }
+                }
+                catch (WebException) when (truncated)
+                {
+                    // Expected when aborting stream early after reaching maxBytes
+                }
+
+                return ms.ToArray();
             }
         }
 
