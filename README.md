@@ -48,20 +48,57 @@ temp/
 
 ---
 
-## CLI & MCP Usage
+## Connecting it to your AI client
 
-### Run as MCP Server (stdio)
+`mcp-ftp` is a standard **stdio** MCP server: the client starts
+`mcp-ftp.exe` and talks to it over standard input and output. Point your client
+at the full path of the executable.
+
+**Claude Desktop** (including its Code tab) - add this to `claude_desktop_config.json`, then restart
+Claude Desktop. The easiest way to open the file is Settings -> Developer -> Edit Config. With the
+current Windows installer it is at
+`%USERPROFILE%\AppData\Local\Claude-Data\claude_pzs8sxrjxfjjc\claude_desktop_config.json`
+(older installs: `%APPDATA%\Claude\claude_desktop_config.json`).
+
 ```json
 {
   "mcpServers": {
     "mcp-ftp": {
-      "command": "D:\\aifiles\\Auto-File-Sync-With-FTP\\github\\src\\MCP-FTP\\bin\\Release\\mcp-ftp.exe"
+      "command": "C:\\tools\\mcp-ftp\\mcp-ftp.exe"
     }
   }
 }
 ```
 
-### Run Standalone CLI / UI
+**Claude Code**
+
+```bash
+claude mcp add mcp-ftp -- "C:\tools\mcp-ftp\mcp-ftp.exe"
+```
+
+**Google Gemini Antigravity** - add this to `%USERPROFILE%\.gemini\config\mcp_config.json`
+(create the file if it does not exist), then restart Antigravity:
+
+```json
+{
+  "mcpServers": {
+    "mcp-ftp": {
+      "command": "C:\\tools\\mcp-ftp\\mcp-ftp.exe",
+      "args": []
+    }
+  }
+}
+```
+
+If the file already lists other servers, add the `"mcp-ftp"` entry inside the
+existing `"mcpServers"` object rather than adding a second one.
+
+**Any other MCP client** - register a stdio server whose command is the path to
+`mcp-ftp.exe`. It takes no arguments and needs no environment variables.
+
+---
+
+## Standalone CLI / UI
 ```powershell
 # Open the WinForms Profile Creator
 mcp-ftp.exe --ui
